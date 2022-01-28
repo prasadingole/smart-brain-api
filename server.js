@@ -2,11 +2,19 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const bcrypt = require('bcrypt');
 const cors = require('cors');
+const knex = require('knex');
+const appdb = require('./dbconfig.js');
+const { response } = require('express');
 const saltRounds = 10;
 const app = express();
 const port = 3000;
+
+const db = knex(appdb.config);
+
 app.use(bodyParser.json());
 app.use(cors());
+
+db.select('*').from('users');
 
 let database;
 
@@ -16,7 +24,7 @@ app.get("/", (req, res) => {
 
 app.listen(port, () => {
     console.log("Service is running on port 3000")
-    const generatedPassword = bcrypt.hashSync("welcome@123",saltRounds);
+    const generatedPassword = bcrypt.hashSync("welcome@123", saltRounds);
     database = {
         "users":
             [
@@ -34,85 +42,93 @@ app.listen(port, () => {
                     "joined": new Date()
                 },
             ],
-            "login": [{
-                "id": 111,
-                "password": generatedPassword
-            },
-            {
-                "id": 112,
-                "password": generatedPassword
-            }],    
+        "login": [{
+            "id": 111,
+            "password": generatedPassword
+        },
+        {
+            "id": 112,
+            "password": generatedPassword
+        }],
         "nextId": 113,
-        
-    
+
+
     }
-    
+
 })
 
 
 app.post("/signin", (req, res) => {
-    const {email,password} = req.body;
-    const usr = database.users.filter(user => user.email === email)[0];
-    if(usr) {
-        const loginUserDetails = database.login.filter(lguser=> lguser.id === usr.id)[0];
-        if(loginUserDetails) {
-            bcrypt.compare(password,loginUserDetails.password,(err,result)=> {
-                if(err || !result) {
-                     res.status(400).json("error logging in").send() 
+    const { email, password } = req.body;
+    db.select('email', 'hash').from('login').where('email', '=', email)
+        .then(data => {
+            if (data.length == 1) {
+                const { email, hash } = data[0];
+                console.log(data[0]);
+                if (bcrypt.compareSync(password, hash)) {
+                    console.log("User ok")
+                    db.select("*")
+                        .from("users")
+                        .where('email', '=', email)
+                        .then(data => res.json(data[0]).send());
                 } else {
-                     res.json(usr).send();
+                    res.status(400).json('error is loggin process').send();
                 }
-            })
-
-        }   
-    } else {
-        res.status(400).json("error logging in").send()
-    }
+            } else {
+                res.status(400).json('error is loggin process').send();
+            }
+        }).catch(err => res.status(400).json('error is loggin process').send())
 })
 
 app.post("/register", (req, res) => {
 
     const { email, name, password } = req.body;
-
-    database.users.push(
-        {
-            "id": database.nextId,
-            "name": name,
-            "email": email,
-            "entries": 0,
-            "joined": new Date()
-
-        });
-
-    bcrypt.hash(password, saltRounds, (err, hash) => {
-        database.login.push({
-            "id": database.nextId,
-            "password": hash
+    const hashedPassword = bcrypt.hashSync(password, saltRounds);
+    db
+        .transaction(trx => {
+            trx.insert({
+                hash: hashedPassword,
+                email: email
+            }).into('login')
+                .returning('email')
+                .then(loginEmail => {
+                    trx('users')
+                        .returning('*')
+                        .insert({
+                            "name": name,
+                            "email": loginEmail[0],
+                            "entries": 0,
+                            "joined": new Date()
+                        }).then(response => res.json(response[0]))
+                }).then(trx.commit)
+                .catch(trx.rollback)
         })
-        database.nextId = database.nextId + 1;
-        console.log(database)
-        res.send(database.users[database.users.length - 1])
-    })
+        .catch(error => res.json("Unable to add this user"));
 })
 
 app.get("/profile/:userId", (req, res) => {
     const { userId } = req.params;
-    let usr = database.users.filter(user => user.id === parseInt(userId))[0];
-    if (usr) {
-        res.json(usr);
-    } else {
-        res.status(404).json("No user found")
-    }
+    db.select('*').from('users').where({
+        "id": userId
+    })
+        .then(response => {
+            if (!response.length) {
+                res.status(404).json("No user found")
+            } else {
+                res.json(response[0])
+            }
+        })
+        .catch(error => res.status(404).json("No user found"))
 })
 
 app.put("/image", (req, res) => {
     const { id } = req.body;
-    let usr = database.users.filter(user => user.id === parseInt(id))[0];
-    if (usr) {
-        usr.entries++;;
-        res.json(usr);
-    } else {
-        res.status(404).json("No user found")
-    }
+    console.log("id", id)
+    db('users')
+        .where('id', '=', id)
+        .increment('entries', 1)
+        .returning("*")
+        .then(user => res.json(user[0]))
+        .catch(err => res.status(400).json('entry could not be updated'));
 })
 
