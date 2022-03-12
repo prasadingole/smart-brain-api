@@ -3,58 +3,26 @@ const bodyParser = require('body-parser');
 const bcrypt = require('bcrypt');
 const cors = require('cors');
 const knex = require('knex');
-const appdb = require('./dbconfig.js');
+const Clarifai = require('clarifai');
+const appConfig = require('./appConfig.js');
 const { response } = require('express');
 const saltRounds = 10;
 const app = express();
 const port = 3000;
 
-const db = knex(appdb.config);
+const clarifaiApp = new Clarifai.App({
+    apiKey: appConfig.clarifaiKey
+});
+
+const db = knex(appConfig.dbConfig);
 
 app.use(bodyParser.json());
 app.use(cors());
 
 db.select('*').from('users');
 
-let database;
-
-app.get("/", (req, res) => {
-    res.send(database);
-})
-
 app.listen(port, () => {
     console.log("Service is running on port 3000")
-    const generatedPassword = bcrypt.hashSync("welcome@123", saltRounds);
-    database = {
-        "users":
-            [
-                {
-                    "id": 111,
-                    "name": "John",
-                    "email": "john@gmail.com",
-                    "entries": 0,
-                    "joined": new Date()
-                }, {
-                    "id": 112,
-                    "name": "Sarah",
-                    "email": "sarah@gmail.com",
-                    "entries": 0,
-                    "joined": new Date()
-                },
-            ],
-        "login": [{
-            "id": 111,
-            "password": generatedPassword
-        },
-        {
-            "id": 112,
-            "password": generatedPassword
-        }],
-        "nextId": 113,
-
-
-    }
-
 })
 
 
@@ -122,13 +90,28 @@ app.get("/profile/:userId", (req, res) => {
 })
 
 app.put("/image", (req, res) => {
-    const { id } = req.body;
-    console.log("id", id)
-    db('users')
+    let finalResponse = {};
+    const { id, imageUrl } = req.body;
+    console.log("id", id);
+    console.log("imageUrl", imageUrl);
+    clarifaiApp
+        .models
+        .predict(Clarifai.FACE_DETECT_MODEL, imageUrl)
+        .then(response => {
+            console.log(response.outputs);
+        
+        db('users')
         .where('id', '=', id)
         .increment('entries', 1)
         .returning("*")
-        .then(user => res.json(user[0]))
-        .catch(err => res.status(400).json('entry could not be updated'));
+        .then(user => {
+            console.log(user);
+            Object.assign(finalResponse, { "entries": user[0].entries,faceDetectionResponse: response });
+            res.json(finalResponse);
+        })
+        .catch(err => res.status(400).json('entry could not be updated'))
+        });
 })
+
+
 
